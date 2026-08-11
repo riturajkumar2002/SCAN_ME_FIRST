@@ -1,5 +1,3 @@
-// API key from VirusTotal API
-const API_KEY = "482c8d34d486b60b7bd794f82b2cba7b523c532c2583b37732a5053f0a3d9513";
 let currentReportData = null;
 
 // Utility function to get DOM elements by ID
@@ -23,24 +21,6 @@ const showLoading = message => updateResult(`
 // Displays an error message
 const showError = message => updateResult(`<p class="error">${message}</p>`);
 
-// Generic function to make authenticated API requests ro VirusTotal
-async function makeRequest(url, options = {}) {
-    const response = await fetch(url, {
-        ...options,
-        headers: {
-            "x-apikey": API_KEY,
-            ...options.headers
-        }
-    });
-
-    // Handle failed requests gracefully
-    if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: { message: response.statusText } }));
-        throw new Error(error.error?.message || 'Request failed!');
-    }
-
-    return response.json(); // Parse response JSON
-}
 
 // Handles the process of scanning a URL using VirusTotal
 async function scanURL() {
@@ -56,27 +36,20 @@ async function scanURL() {
     try {
         showLoading("Submitting URL for scanning...");
 
-        const encodedUrl = encodeURIComponent(url);
-
-        // Submit URL to VirusTotal
-        const submitResult = await makeRequest("https://www.virustotal.com/api/v3/urls", {
-            method: "POST",
+        const response = await fetch('/api/scan', {
+            method: 'POST',
             headers: {
-                "accept": "application/json",
-                "content-type": "application/x-www-form-urlencoded"
+                'Content-Type': 'application/json'
             },
-            body: `url=${encodedUrl}`
+            body: JSON.stringify({ url })
         });
 
-        if (!submitResult.data?.id) {
-            throw new Error("Failed to get analysis ID");
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.error || 'Failed to scan the URL.');
         }
 
-        // Delay before polling for results
-        await new Promise(resolve => setTimeout(resolve, 3000));
-
-        showLoading("Getting scan results...");
-        await pollAnalysisResults(submitResult.data.id);
+        showFormattedResult(result.report);
     } catch (error) {
         showError(`Error: ${error.message}`);
     }
@@ -94,69 +67,22 @@ async function scanFile() {
         const formData = new FormData();
         formData.append("file", file);
 
-        // Upload file to VirusTotal
-        const uploadResult = await makeRequest("https://www.virustotal.com/api/v3/files", {
-            method: "POST",
+        const response = await fetch('/api/scan', {
+            method: 'POST',
             body: formData
         });
 
-        if (!uploadResult.data?.id) {
-            throw new Error("Failed to get file ID!");
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.error || 'Failed to scan the file.');
         }
 
-        // Delay before polling for analysis results
-        await new Promise(resolve => setTimeout(resolve, 3000));
-
-        showLoading("Getting scan results...");
-        const analysisResult = await makeRequest(`https://www.virustotal.com/api/v3/analyses/${uploadResult.data.id}`);
-
-        if (!analysisResult.data?.id) {
-            throw new Error("Failed to get analysis results!");
-        }
-
-        await pollAnalysisResults(analysisResult.data.id, file.name);
+        showFormattedResult(result.report);
     } catch (error) {
         showError(`Error: ${error.message}`);
     }
 }
 
-// Polls VirusTotal for analysis results, retrying until complete or timeout
-async function pollAnalysisResults(analysisId, fileName = '') {
-    const maxAttempts = 20;
-    let attempts = 0;
-    let interval = 2000;
-
-    while (attempts < maxAttempts) {
-        try {
-            showLoading(`Analyzing${fileName ? ` ${fileName}` : ''}... (${((maxAttempts - attempts) * interval / 1000).toFixed(0)}s remaining)`);
-
-            const report = await makeRequest(`https://www.virustotal.com/api/v3/analyses/${analysisId}`);
-            const status = report.data?.attributes?.status;
-
-            if (!status) throw new Error("Invalid analysis response!");
-
-            if (status === "completed") {
-                showFormattedResult(report);
-                break;
-            }
-
-            if (status === "failed") {
-                throw new Error("Analysis failed!");
-            }
-
-            if (++attempts >= maxAttempts) {
-                throw new Error("Analysis timeout - please try again!");
-            }
-
-            // Increase interval between retries
-            interval = Math.min(interval * 1.5, 8000);
-            await new Promise(resolve => setTimeout(resolve, interval));
-        } catch (error) {
-            showError(`Error: ${error.message}`);
-            break;
-        }
-    }
-}
 
 // Formats and displays analysis results in the UI
 function showFormattedResult(data) {

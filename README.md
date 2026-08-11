@@ -31,8 +31,9 @@ A web-based application for scanning URLs and files using the [VirusTotal API](h
 
 ## Set Up the API Key
 
-- This frontend currently uses a VirusTotal API key inside `script.js`.
-- For production, do not commit your real API key to a public repo. Use a backend proxy or Vercel serverless function to keep it secret.
+- This application now uses a secure Vercel serverless function under `api/scan.js`.
+- Add `VIRUSTOTAL_API_KEY` to your Vercel Environment Variables in the project settings.
+- Do not commit your real API key to GitHub.
 
 ## Run the Application
 

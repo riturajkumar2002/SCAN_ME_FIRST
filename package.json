@@ -1,0 +1,8 @@
+{
+  "name": "scan_me_first",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "formidable": "^3.0.0"
+  }
+}
