@@ -107,10 +107,21 @@ const handleUrlScan = async req => {
 
 const handleFileScan = async req => {
     const { fields, files } = await parseMultipart(req);
-    const file = files?.file;
+    let file = files?.file;
 
     if (!file) {
         throw new Error("No file uploaded.");
+    }
+
+    // Normalize file object: formidable may return an array for multiple files
+    if (Array.isArray(file)) file = file[0];
+
+    // Support different formidable versions that use either `filepath` or `path`
+    const filePath = file?.filepath || file?.path || file?.filePath;
+    const filename = file?.originalFilename || file?.name || file?.newFilename || "upload.bin";
+
+    if (!filePath) {
+        throw new Error("Uploaded file path is missing.");
     }
 
     if (file.size > 32 * 1024 * 1024) {
@@ -118,7 +129,7 @@ const handleFileScan = async req => {
     }
 
     const formData = new FormData();
-    formData.append("file", fs.createReadStream(file.filepath), file.originalFilename || "upload.bin");
+    formData.append("file", fs.createReadStream(filePath), filename);
 
     const response = await fetchWithKey("https://www.virustotal.com/api/v3/files", {
         method: "POST",
