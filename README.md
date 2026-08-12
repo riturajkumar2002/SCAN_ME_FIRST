@@ -109,6 +109,7 @@ vercel env add VIRUSTOTAL_API_KEY production
 ```
 
 - Do NOT commit your real API key to the repository. This repo includes `.env.example` as a template; create a local `.env` (ignored by Git) for development only.
+- `.env.example` should only contain placeholder values; never paste an actual VirusTotal key into it.
 
 ## Contributing
 
