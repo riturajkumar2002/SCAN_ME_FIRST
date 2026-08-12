@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "formidable": "^3.0.0",
-    "dotenv": "^16.0.3"
+    "dotenv": "^16.0.3",
+    "form-data": "^4.0.6",
+    "formidable": "^3.0.0"
   }
 }

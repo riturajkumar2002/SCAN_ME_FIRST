@@ -1,6 +1,7 @@
 import { IncomingForm } from "formidable";
 import fs from "fs";
 import { Readable } from "stream";
+import FormData from "form-data";
 import 'dotenv/config';
 
 const API_KEY = process.env.VIRUSTOTAL_API_KEY;
@@ -142,11 +143,17 @@ const handleFileScan = async req => {
     }
 
     const formData = new FormData();
-    formData.append("file", fileStream, filename);
+    formData.append("file", fileStream, {
+        filename,
+        contentType: file?.mimetype || "application/octet-stream",
+    });
 
     const response = await fetchWithKey("https://www.virustotal.com/api/v3/files", {
         method: "POST",
         body: formData,
+        headers: {
+            ...formData.getHeaders(),
+        },
     });
 
     const uploadResult = await response.json();
