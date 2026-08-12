@@ -1,5 +1,7 @@
 import { IncomingForm } from "formidable";
 import fs from "fs";
+import { Readable } from "stream";
+import 'dotenv/config';
 
 const API_KEY = process.env.VIRUSTOTAL_API_KEY;
 
@@ -116,20 +118,31 @@ const handleFileScan = async req => {
     // Normalize file object: formidable may return an array for multiple files
     if (Array.isArray(file)) file = file[0];
 
-    // Support different formidable versions that use either `filepath` or `path`
-    const filePath = file?.filepath || file?.path || file?.filePath;
-    const filename = file?.originalFilename || file?.name || file?.newFilename || "upload.bin";
+    // Support different formidable versions that use either `filepath` or `path`,
+    // and also support in-memory uploads (buffer/data) from other parsers.
+    const filePath = file?.filepath || file?.path || file?.filePath || file?.tempFilePath;
+    const filename = file?.originalFilename || file?.name || file?.newFilename || file?.filename || "upload.bin";
 
-    if (!filePath) {
-        throw new Error("Uploaded file path is missing.");
-    }
-
-    if (file.size > 32 * 1024 * 1024) {
+    const size = file?.size || (file?.buffer ? file.buffer.length : (file?.data ? file.data.length : 0));
+    if (size > 32 * 1024 * 1024) {
         throw new Error("File size exceeds 32MB limit.");
     }
 
+    let fileStream = null;
+    if (filePath) {
+        fileStream = fs.createReadStream(filePath);
+    } else if (file?.buffer) {
+        fileStream = Readable.from(file.buffer);
+    } else if (file?.data) {
+        fileStream = Readable.from(file.data);
+    }
+
+    if (!fileStream) {
+        throw new Error("Uploaded file data is missing or not supported.");
+    }
+
     const formData = new FormData();
-    formData.append("file", fs.createReadStream(filePath), filename);
+    formData.append("file", fileStream, filename);
 
     const response = await fetchWithKey("https://www.virustotal.com/api/v3/files", {
         method: "POST",
