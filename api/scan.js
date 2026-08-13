@@ -1,28 +1,48 @@
 import { IncomingForm } from "formidable";
 import fs from "fs";
-import { Readable } from "stream";
-import FormData from "form-data";
 import 'dotenv/config';
 
-const API_KEY = process.env.VIRUSTOTAL_API_KEY;
+// Disable Vercel's default bodyParser to allow formidable to parse multipart uploads
+export const config = {
+    api: {
+        bodyParser: false,
+    },
+};
 
-const getJsonBody = req => new Promise((resolve, reject) => {
-    let body = "";
-    req.on("data", chunk => {
-        body += chunk;
-    });
-    req.on("end", () => {
+const getApiKey = () => process.env.VIRUSTOTAL_API_KEY;
+
+const getJsonBody = async req => {
+    if (req.body && typeof req.body === "object") {
+        return req.body;
+    }
+    if (typeof req.body === "string" && req.body.length > 0) {
         try {
-            resolve(body ? JSON.parse(body) : {});
-        } catch (err) {
-            reject(err);
+            return JSON.parse(req.body);
+        } catch {
+            return {};
         }
+    }
+    return new Promise((resolve, reject) => {
+        let body = "";
+        req.on("data", chunk => {
+            body += chunk;
+        });
+        req.on("end", () => {
+            try {
+                resolve(body ? JSON.parse(body) : {});
+            } catch (err) {
+                reject(err);
+            }
+        });
+        req.on("error", reject);
     });
-    req.on("error", reject);
-});
+};
 
 const parseMultipart = req => new Promise((resolve, reject) => {
-    const form = new IncomingForm();
+    const form = new IncomingForm({
+        maxFileSize: 32 * 1024 * 1024,
+        keepExtensions: true,
+    });
     form.parse(req, (err, fields, files) => {
         if (err) return reject(err);
         resolve({ fields, files });
@@ -30,10 +50,11 @@ const parseMultipart = req => new Promise((resolve, reject) => {
 });
 
 const fetchWithKey = (url, options = {}) => {
+    const apiKey = getApiKey();
     return fetch(url, {
         ...options,
         headers: {
-            "x-apikey": API_KEY,
+            "x-apikey": apiKey,
             ...(options.headers || {}),
         },
     });
@@ -47,6 +68,12 @@ const pollAnalysisResults = async analysisId => {
     while (attempts < maxAttempts) {
         const response = await fetchWithKey(`https://www.virustotal.com/api/v3/analyses/${analysisId}`);
         const report = await response.json();
+
+        if (!response.ok) {
+            const errMsg = report?.error?.message || "Error fetching analysis from VirusTotal.";
+            throw new Error(errMsg);
+        }
+
         const status = report.data?.attributes?.status;
 
         if (!status) {
@@ -83,7 +110,7 @@ const handleUrlScan = async req => {
     try {
         new URL(url);
     } catch {
-        throw new Error("Please provide a valid URL.");
+        throw new Error("Please provide a valid URL (e.g. https://example.com).");
     }
 
     const formData = new URLSearchParams();
@@ -99,6 +126,12 @@ const handleUrlScan = async req => {
     });
 
     const submitResult = await response.json();
+
+    if (!response.ok) {
+        const errMsg = submitResult?.error?.message || "Failed to submit URL to VirusTotal.";
+        throw new Error(errMsg);
+    }
+
     const analysisId = submitResult.data?.id;
 
     if (!analysisId) {
@@ -119,44 +152,48 @@ const handleFileScan = async req => {
     // Normalize file object: formidable may return an array for multiple files
     if (Array.isArray(file)) file = file[0];
 
-    // Support different formidable versions that use either `filepath` or `path`,
-    // and also support in-memory uploads (buffer/data) from other parsers.
     const filePath = file?.filepath || file?.path || file?.filePath || file?.tempFilePath;
     const filename = file?.originalFilename || file?.name || file?.newFilename || file?.filename || "upload.bin";
+    const mimeType = file?.mimetype || file?.type || "application/octet-stream";
 
-    const size = file?.size || (file?.buffer ? file.buffer.length : (file?.data ? file.data.length : 0));
-    if (size > 32 * 1024 * 1024) {
+    let fileBlob = null;
+    if (filePath && fs.existsSync(filePath)) {
+        const buffer = fs.readFileSync(filePath);
+        fileBlob = new Blob([buffer], { type: mimeType });
+        try {
+            fs.unlinkSync(filePath);
+        } catch {
+            // Ignore cleanup failure
+        }
+    } else if (file?.buffer) {
+        fileBlob = new Blob([file.buffer], { type: mimeType });
+    } else if (file?.data) {
+        fileBlob = new Blob([file.data], { type: mimeType });
+    }
+
+    if (!fileBlob) {
+        throw new Error("Uploaded file data is missing or could not be read.");
+    }
+
+    if (fileBlob.size > 32 * 1024 * 1024) {
         throw new Error("File size exceeds 32MB limit.");
     }
 
-    let fileStream = null;
-    if (filePath) {
-        fileStream = fs.createReadStream(filePath);
-    } else if (file?.buffer) {
-        fileStream = Readable.from(file.buffer);
-    } else if (file?.data) {
-        fileStream = Readable.from(file.data);
-    }
-
-    if (!fileStream) {
-        throw new Error("Uploaded file data is missing or not supported.");
-    }
-
     const formData = new FormData();
-    formData.append("file", fileStream, {
-        filename,
-        contentType: file?.mimetype || "application/octet-stream",
-    });
+    formData.append("file", fileBlob, filename);
 
     const response = await fetchWithKey("https://www.virustotal.com/api/v3/files", {
         method: "POST",
         body: formData,
-        headers: {
-            ...formData.getHeaders(),
-        },
     });
 
     const uploadResult = await response.json();
+
+    if (!response.ok) {
+        const errMsg = uploadResult?.error?.message || "Failed to upload file to VirusTotal.";
+        throw new Error(errMsg);
+    }
+
     const analysisId = uploadResult.data?.id;
 
     if (!analysisId) {
@@ -171,8 +208,9 @@ export default async function handler(req, res) {
         return res.status(405).json({ error: "Method not allowed. Use POST." });
     }
 
-    if (!API_KEY) {
-        return res.status(500).json({ error: "VirusTotal API key is not configured." });
+    const apiKey = getApiKey();
+    if (!apiKey) {
+        return res.status(500).json({ error: "VirusTotal API key is not configured in environment variables (VIRUSTOTAL_API_KEY)." });
     }
 
     try {
